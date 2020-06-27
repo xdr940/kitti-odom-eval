@@ -7,20 +7,10 @@ import os
 from glob import glob
 from path import Path
 
-def scale_lse_solver(X, Y):
-    """Least-sqaure-error solver
-    Compute optimal scaling factor so that s(X)-Y is minimum
-    Args:
-        X (KxN array): current data
-        Y (KxN array): reference data
-    Returns:
-        scale (float): scaling factor
-    """
-    scale = np.sum(X * Y)/np.sum(X ** 2)
-    return scale
 
 
-def umeyama_alignment(x, y, with_scale=False):
+
+def umeyama_alignment(x, y, with_scale=False):#
     """
     Computes the least squares solution parameters of an Sim(m) matrix
     that minimizes the distance between a set of registered points.
@@ -76,9 +66,10 @@ class KittiEvalOdom():
         vo_eval = KittiEvalOdom()
         vo_eval.eval(gt_pose_txt_dir, result_pose_txt_dir)
     """
-    def __init__(self):
+    def __init__(self,plot_keys):
         self.lengths = [100, 200, 300, 400, 500, 600, 700, 800]
         self.num_lengths = len(self.lengths)
+        self.plot_keys = plot_keys
 
     def load_poses_from_txt(self, file_name):
         """Load poses from txt (KITTI format)
@@ -92,21 +83,19 @@ class KittiEvalOdom():
             poses (dict): {idx: 4x4 array}
         """
         f = open(file_name, 'r')
-        s = f.readlines()
+        lines = f.readlines()
         f.close()
         poses = {}
-        for cnt, line in enumerate(s):
-            P = np.eye(4)
-            line_split = [float(i) for i in line.split(" ") if i!=""]
-            withIdx = len(line_split) == 13
-            for row in range(3):
-                for col in range(4):
-                    P[row, col] = line_split[row*4 + col + withIdx]
-            if withIdx:
-                frame_idx = line_split[0]
-            else:
-                frame_idx = cnt
-            poses[frame_idx] = P
+        for idx, line in enumerate(lines):
+            pose = line.split()
+            pose = [float(item) for item in pose]
+            pose+=[0.,0.,0.,1.]#3x4 --> 4x4
+            pose = np.array(pose)
+            pose.resize([4,4])
+            poses[idx] = pose
+
+
+
         return poses
 
     def trajectory_distances(self, poses):
@@ -262,27 +251,34 @@ class KittiEvalOdom():
         else:
             return 0, 0
 
-    def plot_trajectory(self, poses_gt, poses_result, seq):
+    def plot_trajectory(self, poses_gt, pose_pred, seq):
         """Plot trajectory for both GT and prediction
         Args:
             poses_gt (dict): {idx: 4x4 array}; ground truth poses
             poses_result (dict): {idx: 4x4 array}; predicted poses
             seq (int): sequence index.
         """
-        plot_keys = ["Ground Truth", "Ours"]
+        #plot_keys = ["Ours","Ground Truth"]
+        plot_keys = self.plot_keys
+
         fontsize_ = 20
 
         poses_dict = {}
-        poses_dict["Ground Truth"] = poses_gt
-        poses_dict["Ours"] = poses_result
+
+        if len(plot_keys)==0:
+            return
+        if "Ground Truth" in plot_keys:
+            poses_dict["Ground Truth"] = poses_gt
+        if "Ours"in plot_keys:
+            poses_dict["Ours"] = pose_pred
 
         fig = plt.figure()
         ax = plt.gca()
         ax.set_aspect('equal')
 
-        for key in plot_keys:
+        for key in plot_keys:#两条线
             pos_xz = []
-            frame_idx_list = sorted(poses_dict["Ours"].keys())
+            frame_idx_list = sorted(poses_dict[key].keys())
             for frame_idx in frame_idx_list:
                 # pose = np.linalg.inv(poses_dict[key][frame_idx_list[0]]) @ poses_dict[key][frame_idx]
                 pose = poses_dict[key][frame_idx]
@@ -442,6 +438,7 @@ class KittiEvalOdom():
         return rpe_trans, rpe_rot
 
     def scale_optimization(self, gt, pred):
+
         """ Optimize scaling factor
         Args:
             gt (4x4 array dict): ground-truth poses
@@ -449,6 +446,19 @@ class KittiEvalOdom():
         Returns:
             new_pred (4x4 array dict): predicted poses after optimization
         """
+
+        def scale_lse_solver(X, Y):
+            """Least-sqaure-error solver
+            Compute optimal scaling factor so that s(X)-Y is minimum
+            Args:
+                X (KxN array): current data
+                Y (KxN array): reference data
+            Returns:
+                scale (float): scaling factor
+            """
+            scale = np.sum(X * Y) / np.sum(X ** 2)
+            return scale
+
         pred_updated = copy.deepcopy(pred)
         xyz_pred = []
         xyz_ref = []
@@ -483,20 +493,20 @@ class KittiEvalOdom():
             f.writelines(line)
 
 
-    def eval(self, gt_dir, pred_dir,result_dir,
+    def run(self, gt_dir, pred_dir,out_dir,
                 alignment=None,
                 seqs=None):
         """Evaulate required/available sequences
         Args:
             gt_dir (str): ground truth poses txt files directory
-            result_dir (str): pose predictions txt files directory
+            out_dir (str): pose predictions txt files directory
             alignment (str): if not None, optimize poses by
                 - scale: optimize scale factor for trajectory alignment and evaluation
                 - scale_7dof: optimize 7dof for alignment and use scale for trajectory evaluation
                 - 7dof: optimize 7dof for alignment and evaluation
                 - 6dof: optimize 6dof for alignment and evaluation
             seqs (list/None):
-                - None: Evalute all available seqs in result_dir
+                - None: Evalute all available seqs in out_dir
                 - list: list of sequence indexs to be evaluated
         """
         seq_list = ["{:02}".format(i) for i in range(0, 11)]
@@ -511,16 +521,16 @@ class KittiEvalOdom():
         seq_rpe_rot = []
 
         # Create result directory
-        result_dir = Path(result_dir)
-        result_dir.mkdir_p()
-        error_dir = result_dir /"errors"
+        out_dir = Path(out_dir)
+        out_dir.mkdir_p()
+        error_dir = out_dir /"errors"
         error_dir.mkdir_p()
-        self.plot_path_dir = result_dir/"plot_path"
+        self.plot_path_dir = out_dir/"plot_path"
         self.plot_path_dir.mkdir_p()
-        self.plot_error_dir = result_dir /"plot_error"
+        self.plot_error_dir = out_dir /"plot_error"
         self.plot_error_dir.mkdir_p()
-        result_txt = result_dir/"result.txt"
-        f = open(result_txt, 'w')
+        eval_result_txt = out_dir/"eval_result.txt"
+        f = open(eval_result_txt, 'w')
 
 
         # Create evaluation list
@@ -537,41 +547,54 @@ class KittiEvalOdom():
             self.cur_seq = '{:02}'.format(int(i))
             file_name = '{:02}.txt'.format(int(i))
 
-            poses_pred = self.load_poses_from_txt(pred_dir/file_name)
+            poses_pred = self.load_poses_from_txt(pred_dir/file_name)#dict
             poses_gt = self.load_poses_from_txt(self.gt_dir / file_name)
-            self.result_file_name = result_dir/file_name#没用
+            self.result_file_name = out_dir/file_name#没用
 
             # Pose alignment to first frame
             idx_0 = sorted(list(poses_pred.keys()))[0]
-            pred_0 = poses_pred[idx_0]
-            gt_0 = poses_gt[idx_0]
-            for cnt in poses_pred:
-                poses_pred[cnt] = np.linalg.inv(pred_0) @ poses_pred[cnt]
-                poses_gt[cnt] = np.linalg.inv(gt_0) @ poses_gt[cnt]
 
+            pred_0 = poses_pred[idx_0]
+            trans = (np.array([0,0,-1.,0,
+                               0,1,0,0,
+                               1,0,0,0,
+                               0,0,0,1.]).reshape([4,4]))
+            #pred_0 = pred_0@trans#转90度测试
+            pred_0_inv = np.linalg.inv(pred_0)
+
+            gt_0 = poses_gt[idx_0]
+            gt_0_inv = np.linalg.inv(gt_0)
+            #这里的预处理不太懂逻辑, 每个都基本没变, 乘上单位矩阵的逆
+            for cnt in poses_pred:
+
+                poses_pred[cnt] = pred_0_inv @ poses_pred[cnt]
+                poses_gt[cnt] = gt_0_inv @ poses_gt[cnt]
+
+            #pose pred scale preprocessing
             if alignment == "scale":
                 poses_pred = self.scale_optimization(poses_gt, poses_pred)
-            elif alignment == "scale_7dof" or alignment == "7dof" or alignment == "6dof":
+            elif alignment in ["scale_7dof","7dof" ,"6dof"]:
                 # get XYZ
                 xyz_gt = []
                 xyz_pred = []
                 for cnt in poses_pred:
-                    xyz_gt.append([poses_gt[cnt][0, 3], poses_gt[cnt][1, 3], poses_gt[cnt][2, 3]])
+                    xyz_gt.append([poses_gt[cnt][0, 3], poses_gt[cnt][1, 3], poses_gt[cnt][2, 3]])#[T14, T24, T34]
                     xyz_pred.append([poses_pred[cnt][0, 3], poses_pred[cnt][1, 3], poses_pred[cnt][2, 3]])
                 xyz_gt = np.asarray(xyz_gt).transpose(1, 0)
                 xyz_pred = np.asarray(xyz_pred).transpose(1, 0)
 
                 r, t, scale = umeyama_alignment(xyz_pred, xyz_gt, alignment!="6dof")
-
+                #(3,3); (3,), 1.0
                 align_transformation = np.eye(4)
                 align_transformation[:3:, :3] = r
                 align_transformation[:3, 3] = t
                 
                 for cnt in poses_pred:
                     poses_pred[cnt][:3, 3] *= scale
-                    if alignment=="7dof" or alignment=="6dof":
+                    if alignment in ["7dof" ,"6dof"]:
                         poses_pred[cnt] = align_transformation @ poses_pred[cnt]
 
+            print(cnt)
             # compute sequence errors
             seq_err = self.calc_sequence_errors(poses_gt, poses_pred)
             self.save_sequence_errors(seq_err, error_dir + "/" + file_name)
